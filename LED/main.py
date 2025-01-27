@@ -2,13 +2,13 @@ import machine
 import time
 
 # CHANGE THE PORT
-led1 = machine.Pin(13, machine.Pin.OUT)
+led1 = machine.Pin(33, machine.Pin.OUT)
 
 # CHANGE THE PORT
-led2 = machine.Pin(13, machine.Pin.OUT)
+led2 = machine.Pin(32, machine.Pin.OUT)
 
 # CHANGE THE PORT
-led3 = machine.Pin(13, machine.Pin.OUT)
+led3 = machine.Pin(25, machine.Pin.OUT)
 
 sleeptime = 1
 
