@@ -6,32 +6,29 @@ import _thread
 
 # server side log
 log = []
-log_html = ""
 
 # 50% default moisture
 user_input_value = 50
 # 10 minute default
 user_input_value2 = 10
 
-moisture_value = 4095
-
 # defaults, user can change these afterwards
 SSID = "PlantWateringAuto"
 PASSWORD = "12345678"
 
+# default sensor datas to later read periodically
+sensor_data = {"moisture": 0, "water_level": "Unknown"}
 
 ###
 # PIN inits
 ###
-# REPLACE
-moisture_sensor = ADC(Pin(35))
+moisture_sensor = ADC(Pin(27))
 moisture_sensor.atten(ADC.ATTN_11DB) # 3.3V
 # 0 if not enough water supplied
 water_level_sensor = Pin(14, Pin.IN)
 
 pump = Pin(15, Pin.OUT)
 pump.value(0)  # water pump off by default
-
 # green
 led_green = Pin(25, Pin.OUT)
 led_green.value(1)
@@ -56,6 +53,34 @@ def update_log(message):
     # insert new messages at the top
     log.insert(0, message)
 
+def toggle_wifi_off():
+    ap = network.WLAN(network.AP_IF)
+    ap.active(False)
+    time.sleep(0.1)
+    
+    
+def toggle_wifi_on():
+    ap = network.WLAN(network.AP_IF)
+    ap.active(True)
+    ap.config(essid=SSID, password=PASSWORD)
+    time.sleep(0.1)
+
+def read_sensors():
+    global sensor_data
+    toggle_wifi_off()
+    try:        
+        sensor_data["moisture"] = moisture_sensor.read()
+        sensor_data["water_level"] = "Full" if water_level_sensor.value() == 1 else "Low"
+    finally:
+        toggle_wifi_on()
+
+# call this periodically
+def update_sensor_data():
+    while True:
+        read_sensors()
+        # sensor read interval, while wifi is off
+        time.sleep(30)
+
 # starting our access point, which hosts web app
 def start_access_point():
     ap = network.WLAN(network.AP_IF)
@@ -69,14 +94,15 @@ def start_access_point():
           
     return ap.ifconfig()[0]
 
-def web_page(): 
-    global user_input_value, user_input_value2, log, moisture_value         
-    # read the sensor values to display on webapp    
-    moisture_value = moisture_sensor.read()
-    moisture_value_percentage = int(100 * (moisture_value/4095))
-    water_level = "Full" if water_level_sensor.value() == 1 else "Low" 
+    
+def web_page():    
+    global user_input_value, user_input_value2, log  
+    # read the sensor values to display on webapp
+    # disable wifi since it uses ADC2 like sensors do, causing collision
 
-    log_html = "".join([f"<li>{message}</li>" for message in log[-5:]])
+    moisture_value = sensor_data["moisture"]
+    water_level = sensor_data["water_level"]
+    moisture_value_percentage = int(100 * (moisture_value/4095))
     
     print("####################")
     print("moisture sensor is reading:", moisture_value)                
@@ -107,7 +133,7 @@ def web_page():
         <form action="/" method="post">
             <label for="input_value">Moisture threshold %:</label>
             <input type="text" id="input_value" name="input_value"><br><br>
-            <label for="input_value2">Checking time sec:</label>
+            <label for="input_value2">Checking time minutes:</label>
             <input type="text" id="input_value2" name="input_value2"><br><br>
             <input type="submit" value="Submit">
         </form>
@@ -118,8 +144,7 @@ def web_page():
         <div class="log">
             <h3>Log:</h3>
             <ul>
-                {log_html}
-
+                {"".join([f"<li>{{msg}}</li>" for msg in log[-5:]])}
             </ul>
         </div>
         
@@ -129,7 +154,7 @@ def web_page():
                     .then(response => response.text())
                     .then(data => alert(data))
                     .catch(err => console.error(err));
-            }}                       
+            }}              
         </script>
     </body>
     </html>
@@ -158,13 +183,14 @@ def start_web_server():
                     key, value = param.split('=')
                     params[key] = value
 
-                global user_input_value, user_input_value2, moisture_value
+                global user_input_value, user_input_value2
                 user_input_value = int(params.get("input_value", 0))
                 user_input_value2 = int(params.get("input_value2", 0))
                 print(f"Received input_value: {user_input_value}")
                 print(f"Received input_value2: {user_input_value2}")
 
-                # compare                
+                # compare
+                moisture_value = sensor_data["moisture"]
                 moisture_value_percentage = int(100 * (moisture_value/4095))
                 moisture_threshold = user_input_value
                 
@@ -182,55 +208,55 @@ def start_web_server():
                 led_green.value(0)
                 print("Error parsing POST data:", e)
                 response = "Failed to process input value!"
-
+        
+        # manual controls
         elif "/start" in request:
-            pump.value(1)
+            #pump.value(1)
             response = "Pump started!"
         elif "/stop" in request:
-            pump.value(0)
+            #pump.value(0)
             response = "Pump stopped!"
         else:            
             response = web_page()            
         
         conn.send("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" + response)
-        conn.close()
+        conn.close()        
 
 # used with threads
 def watering_cycle():
-    global moisture_value
     needs_watering = False
     while True:
         # wait for user inputed time
         if needs_watering == False:            
-            time.sleep(user_input_value2)
+            time.sleep(user_input_value2 * 60)  #  minutes to seconds
 
-        print("thread")
-
-        # read the moisture value again        
+        # read the moisture value again
+        moisture_value = sensor_data["moisture"]
         moisture_value_percentage = int(100 * (moisture_value / 4095))
-        water_level = "Full" if water_level_sensor.value() == 1 else "Low" 
 
-        if moisture_value_percentage < user_input_value and water_level != "Low":
+        if moisture_value_percentage < user_input_value:
             needs_watering = True
             log_message = "Moisture below threshold. Activating pump."
-            update_log(log_message)            
-            pump.value(1)  # turn on the pump
+            update_log(log_message)
+            #pump.value(1)  # turn on the pump
             time.sleep(3)  # keep the pump on for 3 seconds
-            pump.value(0)  # turn off the pump
+            #pump.value(0)  # turn off the pump
         else:
             needs_watering = False
             log_message = "Moisture level is sufficient."
             update_log(log_message)
 
         # 30 seconds before checking again
-        time.sleep(10)
+        time.sleep(30)
 
 
 try:
     ip_address = start_access_point()
-    print(f"Web server running at http://{ip_address}")        
+    print(f"Web server running at http://{ip_address}")
     
-    # watering cycle thread
+    # thread to periodicallt update sensors
+    _thread.start_new_thread(update_sensor_data, ())
+    
     _thread.start_new_thread(watering_cycle, ())
     
     start_web_server()
